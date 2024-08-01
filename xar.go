@@ -17,6 +17,8 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/xml"
+	"errors"
 	"fmt"
 	"hash"
 	"io"
@@ -26,7 +28,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"xml"
 )
 
 const xarVersion = 1
@@ -107,7 +108,7 @@ type Reader struct {
 
 	Certificates          []*x509.Certificate
 	SignatureCreationTime uint64
-	SignatureError        os.Error
+	SignatureError        error
 
 	xar        io.ReaderAt
 	size       int64
@@ -115,7 +116,7 @@ type Reader struct {
 }
 
 // OpenReader will open the XAR file specified by name and return a Reader.
-func OpenReader(name string) (r *Reader, err os.Error) {
+func OpenReader(name string) (r *Reader, err error) {
 	f, err := os.Open(name)
 	if err != nil {
 		return nil, err
@@ -126,11 +127,11 @@ func OpenReader(name string) (r *Reader, err os.Error) {
 		return nil, err
 	}
 
-	return NewReader(f, info.Size)
+	return NewReader(f, info.Size())
 }
 
 // NewReader returns a new reader reading from r, which is assumed to have the given size in bytes.
-func NewReader(r io.ReaderAt, size int64) (*Reader, os.Error) {
+func NewReader(r io.ReaderAt, size int64) (*Reader, error) {
 	xr := &Reader{
 		File: make(map[uint64]*File),
 		xar:  r,
@@ -152,17 +153,17 @@ func NewReader(r io.ReaderAt, size int64) (*Reader, os.Error) {
 	xh.checksum_kind = binary.BigEndian.Uint32(hdr[24:28])
 
 	if xh.magic != xarHeaderMagic {
-		err = os.NewError("Bad magic")
+		err = errors.New("Bad magic")
 		return nil, err
 	}
 
 	if xh.version != xarVersion {
-		err = os.NewError("Bad version")
+		err = errors.New("Bad version")
 		return nil, err
 	}
 
 	if xh.size != xarHeaderSize {
-		err = os.NewError("Bad header size")
+		err = errors.New("Bad header size")
 	}
 
 	ztoc := make([]byte, xh.toc_len_zlib)
@@ -178,7 +179,10 @@ func NewReader(r io.ReaderAt, size int64) (*Reader, os.Error) {
 	}
 
 	root := &xmlXar{}
-	err = xml.Unmarshal(zr, &root)
+	var dump bytes.Buffer
+	teer := io.TeeReader(zr, &dump)
+	err = xml.NewDecoder(teer).Decode(root)
+	fmt.Println("xml details:", dump.String())
 	if err != nil {
 		return nil, err
 	}
@@ -186,7 +190,7 @@ func NewReader(r io.ReaderAt, size int64) (*Reader, os.Error) {
 	xr.heapOffset = xarHeaderSize + int64(xh.toc_len_zlib)
 
 	if root.Toc.Checksum == nil {
-		return nil, os.NewError("No TOC checksum info in TOC")
+		return nil, errors.New("No TOC checksum info in TOC")
 	}
 
 	// Check whether the XAR checksum matches
@@ -199,26 +203,26 @@ func NewReader(r io.ReaderAt, size int64) (*Reader, os.Error) {
 	var hasher hash.Hash
 	switch xh.checksum_kind {
 	case xarChecksumKindNone:
-		return nil, os.NewError("Encountered xarChecksumKindNone. Don't know how to handle.")
+		return nil, errors.New("Encountered xarChecksumKindNone. Don't know how to handle.")
 	case xarChecksumKindSHA1:
 		if root.Toc.Checksum.Style != "sha1" {
-			return nil, os.NewError("Mismatch between TOC checksum kind and header checksum kind")
+			return nil, errors.New("Mismatch between TOC checksum kind and header checksum kind")
 		}
 		hasher = sha1.New()
 	case xarChecksumKindMD5:
 		if root.Toc.Checksum.Style != "md5" {
-			return nil, os.NewError("Mismatch between TOC checksum kind and header checksum kind")
+			return nil, errors.New("Mismatch between TOC checksum kind and header checksum kind")
 		}
 		hasher = md5.New()
 	default:
-		return nil, os.NewError("Unknown checksum kind in header")
+		return nil, errors.New("Unknown checksum kind in header")
 	}
 
 	hasher.Write(ztoc)
-	calcedsum := hasher.Sum()
+	calcedsum := hasher.Sum(nil)
 
 	if !bytes.Equal(calcedsum, storedsum) {
-		return nil, os.NewError("TOC checksum mismatch")
+		return nil, errors.New("TOC checksum mismatch")
 	}
 
 	// Ignore error. The method automatically sets xr.SignatureError with
@@ -238,7 +242,7 @@ func NewReader(r io.ReaderAt, size int64) (*Reader, os.Error) {
 
 // Reads signature information from the xmlXar element into
 // the Reader. Also attempts to verify any signatures found.
-func (r *Reader) readAndVerifySignature(root *xmlXar, checksumKind uint32, checksum []byte) (err os.Error) {
+func (r *Reader) readAndVerifySignature(root *xmlXar, checksumKind uint32, checksum []byte) (err error) {
 	defer func() {
 		r.SignatureError = err
 	}()
@@ -247,7 +251,7 @@ func (r *Reader) readAndVerifySignature(root *xmlXar, checksumKind uint32, check
 	r.SignatureCreationTime = root.Toc.SignatureCreationTime
 	if root.Toc.Signature != nil {
 		if len(root.Toc.Signature.Certificates) == 0 {
-			return os.NewError("No certificates in XAR")
+			return errors.New("No certificates in XAR")
 		}
 
 		signature := make([]byte, root.Toc.Signature.Size)
@@ -283,7 +287,7 @@ func (r *Reader) readAndVerifySignature(root *xmlXar, checksumKind uint32, check
 		var sighash crypto.Hash
 		switch checksumKind {
 		case xarChecksumKindNone:
-			return os.NewError("Cannot use xarChecksumKindNone with signature")
+			return errors.New("Cannot use xarChecksumKindNone with signature")
 		case xarChecksumKindSHA1:
 			sighash = crypto.SHA1
 		case xarChecksumKindMD5:
@@ -293,14 +297,14 @@ func (r *Reader) readAndVerifySignature(root *xmlXar, checksumKind uint32, check
 		if root.Toc.Signature.Style == "RSA" {
 			pubkey := r.Certificates[0].PublicKey.(*rsa.PublicKey)
 			if pubkey == nil {
-				return os.NewError("Signature style is RSA but certificate's public key is not.")
+				return errors.New("Signature style is RSA but certificate's public key is not.")
 			}
 			err = rsa.VerifyPKCS1v15(pubkey, sighash, checksum, signature)
 			if err != nil {
 				return err
 			}
 		} else {
-			return os.NewError(fmt.Sprint("Unknown signature style %s", root.Toc.Signature.Style))
+			return errors.New(fmt.Sprint("Unknown signature style %s", root.Toc.Signature.Style))
 		}
 	}
 
@@ -341,24 +345,24 @@ func (r *Reader) ValidSignature() bool {
 	return r.SignatureCreationTime > 0 && r.SignatureError == nil
 }
 
-func xmlFileToFileInfo(xmlFile *xmlFile) (fi FileInfo, err os.Error) {
+func xmlFileToFileInfo(xmlFile *xmlFile) (fi FileInfo, err error) {
 	t, err := time.Parse(time.RFC3339, xmlFile.Ctime)
 	if err != nil {
 		return
 	}
-	fi.Ctime = t.Seconds()
+	fi.Ctime = t.Unix()
 
 	t, err = time.Parse(time.RFC3339, xmlFile.Mtime)
 	if err != nil {
 		return
 	}
-	fi.Mtime = t.Seconds()
+	fi.Mtime = t.Unix()
 
 	t, err = time.Parse(time.RFC3339, xmlFile.Atime)
 	if err != nil {
 		return
 	}
-	fi.Atime = t.Seconds()
+	fi.Atime = t.Unix()
 
 	fi.Group = xmlFile.Group
 	fi.Gid = xmlFile.Gid
@@ -375,19 +379,19 @@ func xmlFileToFileInfo(xmlFile *xmlFile) (fi FileInfo, err os.Error) {
 }
 
 // Convert a xmlFileChecksum to a FileChecksum.
-func fileChecksumFromXml(f *FileChecksum, x *xmlFileChecksum) (err os.Error) {
+func fileChecksumFromXml(f *FileChecksum, x *xmlFileChecksum) (err error) {
 	f.Sum, err = hex.DecodeString(x.Digest)
 	if err != nil {
 		return
 	}
 
-	switch x.Style {
+	switch strings.ToUpper(x.Style) {
 	case "MD5":
 		f.Kind = FileChecksumKindMD5
 	case "SHA1":
 		f.Kind = FileChecksumKindSHA1
 	default:
-		return os.NewError("Unknown file checksum kind")
+		return errors.New("Unknown file checksum kind")
 	}
 
 	return nil
@@ -399,7 +403,7 @@ func (r *Reader) newHeapReader() *io.SectionReader {
 }
 
 // Reads the file tree from a parse XAR TOC into the Reader.
-func (r *Reader) readXmlFileTree(xmlFile *xmlFile, dir string) (err os.Error) {
+func (r *Reader) readXmlFileTree(xmlFile *xmlFile, dir string) (err error) {
 	xf := &File{}
 	xf.heap = r.newHeapReader()
 
@@ -411,7 +415,7 @@ func (r *Reader) readXmlFileTree(xmlFile *xmlFile, dir string) (err os.Error) {
 		return
 	}
 
-	xf.Id, err = strconv.Atoui64(xmlFile.Id)
+	xf.Id, err = strconv.ParseUint(xmlFile.Id, 10, 64)
 	if err != nil {
 		return
 	}
@@ -424,7 +428,7 @@ func (r *Reader) readXmlFileTree(xmlFile *xmlFile, dir string) (err os.Error) {
 	}
 
 	if xf.Type == FileTypeFile && xmlFile.Data == nil {
-		err = os.NewError("Encountered file with no data")
+		err = errors.New("Encountered file with no data")
 		return
 	}
 	if xf.Type == FileTypeFile {
@@ -460,7 +464,7 @@ func (r *Reader) readXmlFileTree(xmlFile *xmlFile, dir string) (err os.Error) {
 
 // Open returns a ReadCloser that provides access to the file's
 // uncompressed content.
-func (f *File) Open() (rc io.ReadCloser, err os.Error) {
+func (f *File) Open() (rc io.ReadCloser, err error) {
 	r := io.NewSectionReader(f.heap, f.offset, f.length)
 	switch f.EncodingMimetype {
 	case "application/octet-stream":
@@ -470,7 +474,7 @@ func (f *File) Open() (rc io.ReadCloser, err os.Error) {
 	case "application/x-bzip2":
 		rc = ioutil.NopCloser(bzip2.NewReader(r))
 	default:
-		err = os.NewError("Unknown file encoding")
+		err = errors.New("Unknown file encoding")
 	}
 
 	return rc, err
@@ -479,7 +483,7 @@ func (f *File) Open() (rc io.ReadCloser, err os.Error) {
 // OpenRaw returns a ReadCloser that provides access to the file's
 // raw content. The encoding of the raw content is specified in
 // the File's EncodingMimetype field.
-func (f *File) OpenRaw() (rc io.ReadCloser, err os.Error) {
+func (f *File) OpenRaw() (rc io.ReadCloser, err error) {
 	rc = ioutil.NopCloser(io.NewSectionReader(f.heap, f.offset, f.length))
 	return
 }
@@ -504,6 +508,6 @@ func (f *File) VerifyChecksum() bool {
 	}
 
 	io.Copy(hasher, io.NewSectionReader(f.heap, f.offset, f.length))
-	sum := hasher.Sum()
+	sum := hasher.Sum(nil)
 	return bytes.Equal(sum, f.CompressedChecksum.Sum)
 }
