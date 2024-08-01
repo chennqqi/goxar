@@ -2,7 +2,7 @@
 // The use of this source code is goverened by a BSD-style
 // license that can be found in the LICENSE-file.
 
-package xar
+package goxar
 
 import (
 	"fmt"
@@ -12,7 +12,7 @@ import (
 func TestOpenFile(t *testing.T) {
 	r, err := OpenReader("payload.xar")
 	if err != nil {
-		t.Errorf(err.String())
+		t.Errorf("%v", err)
 	}
 
 	if r.HasSignature() {

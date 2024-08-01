@@ -3,7 +3,7 @@
 // license that can be found in the LICENSE-file.
 
 // The xar package provides for reading and writing XAR archives.
-package xar
+package goxar
 
 import (
 	"bytes"
@@ -304,7 +304,7 @@ func (r *Reader) readAndVerifySignature(root *xmlXar, checksumKind uint32, check
 				return err
 			}
 		} else {
-			return errors.New(fmt.Sprint("Unknown signature style %s", root.Toc.Signature.Style))
+			return fmt.Errorf("Unknown signature style %s", root.Toc.Signature.Style)
 		}
 	}
 

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/chennqqi/xar"
+	"github.com/chennqqi/goxar"
 )
 
 func main() {
@@ -14,7 +14,7 @@ func main() {
 		return
 	}
 	filename := os.Args[1]
-	r, err := xar.OpenReader(filename)
+	r, err := goxar.OpenReader(filename)
 	if err != nil {
 		fmt.Println("read", filename, err)
 		return
