@@ -121,6 +121,7 @@ func OpenReader(name string) (r *Reader, err error) {
 	if err != nil {
 		return nil, err
 	}
+	defer f.Close()
 
 	info, err := f.Stat()
 	if err != nil {
@@ -179,10 +180,15 @@ func NewReader(r io.ReaderAt, size int64) (*Reader, error) {
 	}
 
 	root := &xmlXar{}
-	var dump bytes.Buffer
-	teer := io.TeeReader(zr, &dump)
-	err = xml.NewDecoder(teer).Decode(root)
-	fmt.Println("xml details:", dump.String())
+
+	if false { //debug
+		var dump bytes.Buffer
+		teer := io.TeeReader(zr, &dump)
+		err = xml.NewDecoder(teer).Decode(root)
+		fmt.Println("xml details:", dump.String())
+	} else {
+		err = xml.NewDecoder(zr).Decode(root)
+	}
 	if err != nil {
 		return nil, err
 	}
