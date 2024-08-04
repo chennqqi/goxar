@@ -351,22 +351,25 @@ func (r *Reader) ValidSignature() bool {
 	return r.SignatureCreationTime > 0 && r.SignatureError == nil
 }
 
-func xmlFileToFileInfo(xmlFile *xmlFile) (fi FileInfo, err error) {
+func xmlFileToFileInfo(xmlFile *xmlFile) (fi FileInfo, rerr error) {
 	t, err := time.Parse(time.RFC3339, xmlFile.Ctime)
 	if err != nil {
-		return
+		//rerr = err
+		//return
 	}
 	fi.Ctime = t.Unix()
 
 	t, err = time.Parse(time.RFC3339, xmlFile.Mtime)
 	if err != nil {
-		return
+		//rerr = err
+		//return
 	}
 	fi.Mtime = t.Unix()
 
 	t, err = time.Parse(time.RFC3339, xmlFile.Atime)
 	if err != nil {
-		return
+		//rerr = err
+		//return
 	}
 	fi.Atime = t.Unix()
 
